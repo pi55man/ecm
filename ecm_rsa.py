@@ -173,83 +173,134 @@ def pick_b1(bits):
     return 50000
 
 
-def break_key(n, e, c, B1):
-    p, curves = ecm(n, B1, 5000)
+def find_factor(n):
+    f = trial_division(n, 1000)
+    if f != 1:
+        return f, 0
+    levels = [[500, 25], [2000, 90], [11000, 300], [50000, 200]]
+    total = 0
+    for level in levels:
+        B1 = level[0]
+        curves = level[1]
+        print("B1 =", B1)
+        f, used = ecm(n, B1, curves)
+        total = total + used
+        if f != 1:
+            return f, total
+    return 1, total
+
+
+def break_key(n, e, c):
+    p, curves = find_factor(n)
     if p == 1:
-        return 0, 0, 0, curves
+        return 0, 0, 0, 0, curves
     q = n // p
     phi = (p - 1) * (q - 1)
     d = pow(e, -1, phi)
     m = pow(c, d, n)
-    return m, p, d, curves
+    return m, p, q, d, curves
 
 
-def run_checks():
-    print("Running checks...")
-    assert gcd(12, 18) == 6
-    assert gcd(17, 5) == 1
-    assert is_prime(97)
-    assert is_prime(1000003)
-    assert not is_prime(561)
-    assert not is_prime(1000001)
-    assert len(primes_up_to(100)) == 25
-    assert len(primes_up_to(1000000)) == 78498
-
-    n = 1000003
-    a24 = 12345
-    x, z = 7, 1
-    x6, z6 = ladder(6, x, z, a24, n)
-    x2, z2 = point_double(x, z, a24, n)
-    x3, z3 = ladder(3, x2, z2, a24, n)
-    assert x6 * z3 % n == x3 * z6 % n
-
-    n = 999983 * 1000003
-    f, curves = ecm(n, 500, 1000)
-    assert f == 999983 or f == 1000003
-
-    p = random_prime(32)
-    q = random_prime(200)
-    f, curves = ecm(p * q, 1000, 1000)
-    assert f == p
-
-    print("All checks passed\n")
+def read_message():
+    msg = input("message: ")
+    if msg == "":
+        msg = "attack at dawn"
+    return msg
 
 
-def demo():
-    print("=== Breaking a weak RSA key ===")
-    n, e, d, p, q = make_weak_key(40, 500)
-    print("n has", n.bit_length(), "bits")
-    print("n =", n)
-    print("e =", e)
+def read_number(text):
+    while True:
+        s = input(text).strip()
+        try:
+            return int(s)
+        except ValueError:
+            print("invalid number")
 
-    message = "attack at dawn"
+
+def attack(p, q, message):
+    e = 65537
+    n = p * q
+    phi = (p - 1) * (q - 1)
+    d = pow(e, -1, phi)
+
     m = int.from_bytes(message.encode(), "big")
+    if m >= n:
+        print("message too long")
+        return
     c = pow(m, e, n)
-    print("ciphertext =", c)
+
+    print()
+    print("n =", n)
+    print("bits:", n.bit_length())
+    print("e =", e)
+    print("c =", c)
     print()
 
     start = time.time()
-    m2, found_p, found_d, curves = break_key(n, e, c, 2000)
+    m2, found_p, found_q, found_d, curves = break_key(n, e, c)
     elapsed = time.time() - start
+    print()
 
     if found_p == 0:
-        print("ECM did not find a factor")
+        print("no factor found")
+        print("curves:", curves)
+        print("time: %.2f s" % elapsed)
+        print()
         return
 
-    text = m2.to_bytes((m2.bit_length() + 7) // 8, "big").decode()
-    print("found p =", found_p, "(" + str(found_p.bit_length()) + " bits)")
-    print("real  p =", p)
-    print("recovered d matches:", found_d == d)
-    print("decrypted message:", text)
-    print("curves used:", curves)
-    print("time: %.2f seconds" % elapsed)
+    text = m2.to_bytes((m2.bit_length() + 7) // 8, "big").decode(errors="replace")
+    print("p =", found_p, "(" + str(found_p.bit_length()) + " bits)")
+    print("q =", found_q, "(" + str(found_q.bit_length()) + " bits)")
+    print("d correct:", found_d == d)
+    print("message:", text)
+    print("curves:", curves)
+    print("time: %.2f s" % elapsed)
+    print()
+
+
+def random_demo():
+    bits = input("bits of p: ").strip()
+    if bits.isdigit() and int(bits) >= 2:
+        bits = int(bits)
+    else:
+        bits = 40
+    n, e, d, p, q = make_weak_key(bits, 500)
+    message = read_message()
+    attack(p, q, message)
+
+
+def custom_demo():
+    e = 65537
+    p = read_number("p: ")
+    q = read_number("q: ")
+    if not is_prime(p):
+        print("p is not prime")
+        return
+    if not is_prime(q):
+        print("q is not prime")
+        return
+    if p == q:
+        print("p and q are equal")
+        return
+    if gcd(e, (p - 1) * (q - 1)) != 1:
+        print("gcd(e, phi) != 1")
+        return
+    message = read_message()
+    attack(p, q, message)
+
+
+def prime_helper():
+    bits = read_number("bits: ")
+    if bits < 2:
+        print("too small")
+        return
+    print(random_prime(bits))
     print()
 
 
 def timing_table():
-    print("=== Trial division vs ECM ===")
-    print("%-12s %-18s %-14s %-8s" % ("p bits", "trial division", "ECM", "curves"))
-    for bits in [16, 20, 24, 32, 40, 48, 56]:
+    print("%-8s %-10s %-10s %-8s" % ("bits", "trial", "ecm", "curves"))
+    for bits in [16, 20, 24, 32, 40, 48]:
         n, e, d, p, q = make_weak_key(bits, 500)
 
         if bits <= 24:
@@ -258,7 +309,7 @@ def timing_table():
             t1 = time.time() - start
             trial_text = "%.3f s" % t1
         else:
-            trial_text = "too slow"
+            trial_text = "-"
 
         start = time.time()
         f, curves = ecm(n, pick_b1(bits), 5000)
@@ -266,16 +317,40 @@ def timing_table():
         if f == p:
             ecm_text = "%.3f s" % t2
         else:
-            ecm_text = "failed"
+            ecm_text = "-"
 
-        print("%-12d %-18s %-14s %-8d" % (bits, trial_text, ecm_text, curves))
+        print("%-8d %-10s %-10s %-8d" % (bits, trial_text, ecm_text, curves))
     print()
 
 
 def main():
-    run_checks()
-    demo()
-    timing_table()
+    while True:
+        print("1. random key")
+        print("2. enter p and q")
+        print("3. random prime")
+        print("4. timing table")
+        print("5. exit")
+        choice = input("> ").strip()
+        print()
+        try:
+            if choice == "1":
+                random_demo()
+            elif choice == "2":
+                custom_demo()
+            elif choice == "3":
+                prime_helper()
+            elif choice == "4":
+                timing_table()
+            elif choice == "5":
+                break
+            else:
+                print("invalid option")
+                print()
+        except KeyboardInterrupt:
+            print()
+            print("interrupted")
+            print()
 
 
 main()
+
